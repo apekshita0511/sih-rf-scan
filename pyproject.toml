@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rfscan"
+version = "0.1.0"
+description = "AI-Driven Adaptive RF Scan Intelligence Platform (SIH26055 - Smart Scan Strategy for Electronic Warfare)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.1,<3",
+    "scipy>=1.11,<2",
+    "scikit-learn>=1.4,<2",
+    "plotly>=5.18,<7",
+    "streamlit>=1.31,<2",
+    "pyyaml>=6.0,<7",
+    "dacite>=1.8,<2",
+    "joblib>=1.3,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-cov>=4.1,<7",
+    "ruff>=0.4,<1",
+]
+
+[project.scripts]
+rfscan = "rfscan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rfscan*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

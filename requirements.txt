@@ -1,0 +1,7 @@
+# Runtime + dev dependencies are declared in pyproject.toml.
+# Install the project (editable) with the dev extras:
+#
+#   pip install -e ".[dev]"
+#
+# This file exists for tools/CI that expect a requirements.txt.
+-e .[dev]

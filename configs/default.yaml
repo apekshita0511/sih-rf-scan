@@ -1,0 +1,40 @@
+# Default application configuration.
+# Mirrors rfscan.config.AppConfig() exactly (verified by tests/test_config.py).
+# Copy this file, edit, and pass with:  rfscan --config my_config.yaml <command>
+
+simulation:
+  n_channels: 13
+  slot_duration_s: 0.1
+  scan_budget_slots: 2000
+  channel_plan: wifi_24ghz        # wifi_24ghz | generic
+  channel_plan_params: {}         # for 'generic': start_hz, spacing_hz, bandwidth_hz
+
+scheduler:                        # adaptive-scheduler priority weights
+  w_pred: 1.0                     # exploit: predicted activity probability
+  w_explore: 0.5                  # explore: belief uncertainty bonus
+  w_fresh: 0.3                    # freshness: revisit stale channels
+  w_trend: 0.4                    # responsiveness: rising recent activity
+  w_redundancy: 0.2               # penalty: just-scanned / confidently-empty
+  freshness_tau_slots: 20.0
+  softmax_temperature: null       # null -> argmax selection; float -> sampled
+
+belief:                           # decaying Beta-Bernoulli occupancy belief
+  prior_alpha: 1.0
+  prior_beta: 1.0
+  decay_lambda: 0.98              # per-slot pull of unscanned channels to prior
+
+model:
+  kind: logistic_regression       # beta | logistic_regression | random_forest | hist_gradient_boosting
+  calibration: isotonic           # none | sigmoid | isotonic
+  recent_window: 20
+  artifact_path: artifacts/model.joblib
+
+experiment:
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+          15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+  strategies: [sequential, random, heuristic, adaptive]
+  scenarios: [normal]
+  results_dir: artifacts/results
+
+random_seed: 42
+log_level: INFO
