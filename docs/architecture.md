@@ -156,7 +156,7 @@ scheduler/
   base.py          SchedulerProtocol { select_next(store, slot)->int, update(record), explain() }
   sequential.py    RandomScheduler, SequentialScheduler                                    [Phase 3]
   heuristic.py     HeuristicScheduler (epsilon-greedy on empirical detection rate)         [Phase 3]
-  belief.py        BeliefState  (Beta(a,b) per channel; decay(); update(c,y); mean/std/sample)
+  belief.py        BeliefState  (Beta(a,b) per channel; decay(); update(c,y); mean/std/sample) [Phase 6]
   policy.py        PriorityPolicy (weights, term functions, score()->PriorityBreakdown)   [Phase 6]
   adaptive.py      AdaptiveScheduler (wires BeliefState + Predictor + PriorityPolicy)      [Phase 6]
   ucb.py, thompson.py   alternative decision rules for the bake-off                        [Phase 8]
@@ -668,3 +668,118 @@ Concrete decisions made when implementing §8.1, with the doc updated to match:
   different ML problem from this project's discrete-slot channel-occupancy
   scan scheduling. Not integrated; the simulator remains the sole data
   source (see each model card's "Investigated but not integrated" section).
+
+### 16.6 Phase 6 adaptive scheduler — realisation choices
+
+- **`BeliefState` (`scheduler/belief.py`).** A live, incremental analogue of
+  `perception/features.py::decaying_beta_posterior` (which replays a
+  channel's full history from scratch — fine as a training-time *feature*,
+  too slow as a per-slot, per-channel live object under the < 5 ms/slot
+  budget). `BeliefState` keeps `(alpha, beta)` numpy arrays and updates them
+  in O(1) per channel: `decay()` applies one uniform forgetting-factor step
+  to *every* channel each slot (`a <- lambda*a + (1-lambda)*prior_a`, same
+  for `b`), then `update(c, y)` adds the scanned channel's evidence on top.
+  This is a deliberate reading of S7's "every unscanned channel decays" rule:
+  at the top of the closed loop the scheduler does not yet know which
+  channel it is about to scan, so there is no way to exempt it from decay in
+  advance; decaying uniformly first and then layering fresh evidence on the
+  scanned channel is the standard exponential-forgetting recursive-Bayes
+  filter and produces the same qualitative behaviour (unscanned channels
+  relax toward the prior and grow less certain; the scanned channel
+  sharpens). Also exposes `sample()` (per-channel Beta draw, own RNG) for the
+  Phase 8 Thompson-sampling alternative — unused by AdaptiveScheduler v1's
+  argmax rule.
+- **`PriorityPolicy` (`scheduler/policy.py`).** Implements S7's weighted sum
+  exactly for `pred`/`explore`/`fresh`/`trend`. S7 does not give a numerical
+  definition for `redundancy(c)` beyond "recently scanned & confidently
+  empty" — implemented as
+  `exp(-staleness(c) / redundancy_tau) * (1 - p(c))`: large exactly when a
+  channel was scanned a moment ago (small staleness) *and* the predictor is
+  confident it is empty (`p(c)` near 0), decaying smoothly as either grows,
+  using only quantities the scheduler already has (no new state). Returns a
+  `PriorityBreakdown` per channel (the five signed term *contributions*, not
+  raw inputs) so the chosen channel's breakdown is exactly the S10 dashboard
+  stacked bar with no further transformation.
+- **`AdaptiveScheduler` (`scheduler/adaptive.py`).** No online learning in
+  v1 — the predictor is injected pre-fit, matching `Predictor`'s structural
+  contract deliberately excluding `partial_fit` (S16.5); only `BeliefState`
+  adapts within an episode. Reuses `FeatureBuilder`'s `slots_since_last_scan`
+  and `activity_trend` columns directly for `staleness`/`trend` rather than
+  recomputing them from the store a second time.
+  **Hard freshness guarantee:** if any channel's staleness reaches
+  `max_revisit_slots` (default `3 * n_channels`), it is force-selected
+  regardless of priority — tie-broken toward the stalest, then lowest index.
+  Because `FeatureBuilder.MAX_STALENESS` (1000, S16.5) is far larger than any
+  reasonable `max_revisit_slots`, every never-scanned channel already exceeds
+  the cap from slot 0: **the guarantee subsumes initial coverage, not just
+  steady-state revisit**, matching S7's stated intent ("so every channel —
+  including a future emerger — is eventually scanned") without any special
+  cold-start logic. Verified in `tests/test_adaptive.py`.
+  **Selection rule:** `softmax_temperature=None` (the S7/S8 recommended
+  final: weighted priority, argmax) is the config default; a numeric
+  temperature switches to softmax sampling on an internal agent RNG, for the
+  S7 "weighted priority + softmax" variant (Phase 8 bake-off candidate),
+  already implemented and tested, not yet the default.
+- **Predictor wiring (`models/loader.py::load_predictor`).** `kind="beta"`
+  returns `DecayingBetaPredictor` directly (no I/O). For any other `kind`,
+  `rfscan train` now persists *every* bake-off candidate as
+  `model_<name>.joblib` next to the chosen model (`train.py`'s
+  `Phase5Result.candidate_model_paths`, an additive Phase 6 extension —
+  `choose_final_model`'s offline-reporting winner and its output files are
+  unchanged), so `load_predictor` can return a *specific* candidate by name,
+  falling back to the single `model_config.artifact_path` file (the
+  reporting winner) if no per-candidate file exists. Kept out of
+  `AdaptiveScheduler` itself (constructor takes an already-built `Predictor`)
+  so scheduler tests never need a trained artifact on disk, mirroring how
+  Phase 5's own tests avoid depending on `artifacts/model.joblib`.
+- **Live predictor choice — a real closed-loop finding, not a design guess.**
+  Phase 5's bake-off chose `hist_gradient_boosting` on offline PR-AUC/
+  calibration (S16.5) — that conclusion is correct and unchanged. But
+  running it *inside* `AdaptiveScheduler`'s per-slot loop for the first time
+  (this phase) surfaced an operational cost the offline bake-off cannot see:
+  `CalibratedClassifierCV`-wrapped `HistGradientBoostingClassifier.
+  predict_proba` on a 13-row batch (one row per channel, once per slot) took
+  a measured 4.7-4.9 ms/call — profiling traced this to sklearn's per-tree
+  Python-level call overhead across 181 boosting iterations, which does not
+  amortize at this batch size (confirmed by re-measuring at max_iter
+  25/50/100/200: latency scales near-linearly with tree count, ~1.5 ms
+  fixed overhead + ~0.015 ms/tree). Logistic Regression's single matrix
+  multiply measured 1.2-1.3 ms/call under the same conditions. This is
+  *exactly* what S6/S8's "ship the simplest model that wins the loop" is
+  for: `configs/default.yaml`'s `model.kind: logistic_regression` (already
+  the project default, unchanged) is confirmed as `AdaptiveScheduler`'s live
+  predictor for this reason, while `hist_gradient_boosting` remains the
+  correctly-documented offline bake-off winner in `docs/model_cards/` and
+  `model_bakeoff.csv`. Measured with the real trained model on the full
+  7-scenario grid: mean decision latency 1.13 ms/slot (max 1.19 ms) — well
+  inside the < 5 ms budget, versus 5.4 ms mean (over budget) with
+  `hist_gradient_boosting` live. This offline-vs-live predictor split is a
+  direct instance of the batch-latency-vs-single-row-latency distinction:
+  `model_bakeoff.csv`'s per-row latency figures were measured over
+  2-million-row batches, where per-tree call overhead amortizes away — they
+  do not predict small-batch, real-time serving latency, which only shows up
+  once a model is actually run inside the closed loop.
+- **Benchmark wiring.** `experiments/benchmark.py` accepts `"adaptive"` as a
+  named strategy (`VALID_STRATEGIES`) with its own `ModelConfig`/
+  `SchedulerWeights`/`BeliefConfig` fields on `BenchmarkConfig`, but the
+  default `strategies` tuple is unchanged (still the three Phase 4
+  baselines) — the full scenarios × seeds × strategies grid *including*
+  adaptive, with bootstrap CIs and the paired significance tests, is Phase
+  8's "inferential layer" (S4), not Phase 6's. Phase 6's own exit criterion
+  (full loop runs; latency < 5 ms/slot; beats random on delay) is verified
+  directly in `tests/test_integration_phase6.py` using
+  `DecayingBetaPredictor` (no trained-artifact dependency, same reasoning as
+  Phase 5's own tests) and confirmed again as a real run with the actual
+  trained, calibrated `logistic_regression` model (`rfscan train`'s output,
+  the live default per the finding above) across the full 7-scenario × 3-seed
+  grid: latency 1.13 ms/slot mean; redundant-scan rate far below heuristic's
+  in every scenario (e.g. `normal`: 0.11 vs 0.38); and, in `emerging_signal`
+  — the project's central motivating case — heuristic discovered the
+  emerging emitter in 0 of 3 seeds (fully censored) while adaptive discovered
+  it in all 3. Raw `mean_detection_delay_slots` is not yet uniformly better
+  than sequential/heuristic across every scenario — expected, since the
+  scheduler weights are still `configs/default.yaml`'s untuned defaults;
+  weight tuning against train scenarios, frozen and evaluated on held-out
+  ones, is Phase 11's job (S11), and the full paired-significance comparison
+  is Phase 8's. Not reproduced in full here since a benchmark result is a
+  run artifact, not a design decision, per S9's "no fabrication" rule.

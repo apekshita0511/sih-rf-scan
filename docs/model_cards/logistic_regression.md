@@ -95,7 +95,7 @@ Not integrated for Phase 5; the simulator remains the sole data source.
 Expected calibration error: 0.0027.
 
 ## Computational characteristics
-Inference latency: 0.51 us/row (measured, wall-clock).
+Inference latency: 0.45 us/row (measured, wall-clock).
 Parameters/complexity: 18.
 
 ## Limitations

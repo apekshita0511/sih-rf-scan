@@ -2,13 +2,23 @@
 
 **Smart India Hackathon 2026 · Problem SIH26055 — Smart Scan Strategy for Electronic Warfare · DRDO · Software**
 
-> **Build status: Phase 5 of 13 complete** — stochastic RF simulator, sensor + memory +
+> **Build status: Phase 6 of 13 complete** — stochastic RF simulator, sensor + memory +
 > baseline strategies, the reproducible-evaluation foundation (seven seeded benchmark
-> scenarios, `run_episode`, censored-aware episode metrics, `rfscan benchmark`), and now
-> the ML prediction pipeline: a 17-feature `FeatureBuilder`, a non-ML decaying-Beta
-> reference predictor, calibrated Logistic Regression / HistGradientBoosting candidates,
-> a leakage-tested temporal train/val/test split, and a real bake-off (`rfscan train`)
-> with model cards under `docs/model_cards/`.
+> scenarios, `run_episode`, censored-aware episode metrics, `rfscan benchmark`), the ML
+> prediction pipeline (17-feature `FeatureBuilder`, a non-ML decaying-Beta reference
+> predictor, calibrated Logistic Regression / HistGradientBoosting candidates, a
+> leakage-tested temporal train/val/test split, and a real bake-off via `rfscan train`
+> with model cards under `docs/model_cards/`), and now the **AdaptiveScheduler**: a
+> decaying-Beta `BeliefState`, a weighted multi-objective `PriorityPolicy`, and a hard
+> freshness guarantee — the first end-to-end closed loop (world → belief → predictor →
+> priority → scan → belief update). Running a model *inside* that loop for the first
+> time surfaced a real operational finding the offline bake-off couldn't see: the
+> bake-off's chosen HistGradientBoosting model exceeds the < 5 ms/slot latency budget on
+> the closed loop's tiny per-slot batch (sklearn per-tree call overhead across 181 trees,
+> ~5.4 ms measured); Logistic Regression — already `configs/default.yaml`'s live-serving
+> default — comfortably meets it (~1.1 ms measured), so it is the scheduler's live
+> predictor while HistGradientBoosting remains the correctly-documented offline winner
+> in `docs/model_cards/` (see `docs/architecture.md` S16.6).
 > Full documentation lands in Phase 13. See [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ---
@@ -113,7 +123,7 @@ artifacts/        trained models + experiment results (git-ignored)
 | 3  | Baseline scanners + observation store | ✅ |
 | 4  | Scenario engine (7 scenarios) + experiment runner + metrics + baseline benchmark | ✅ |
 | 5  | Feature pipeline + ML model bake-off | ✅ |
-| 6  | Adaptive scheduler v1 (thin end-to-end loop) | ⬜ |
+| 6  | Adaptive scheduler v1 (thin end-to-end loop) | ✅ |
 | 7  | Online feedback + emerging-signal adaptation | ⬜ |
 | 8  | Full benchmark grid + ablation + robustness | ⬜ |
 | 9  | Streamlit dashboard | ⬜ |

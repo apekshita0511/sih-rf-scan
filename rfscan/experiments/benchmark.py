@@ -17,9 +17,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from rfscan.config import BeliefConfig, ModelConfig, SchedulerWeights
 from rfscan.experiments.metrics import compute_episode_metrics
 from rfscan.experiments.runner import run_episode
 from rfscan.logging_config import get_logger
+from rfscan.models.base import Predictor
+from rfscan.models.loader import load_predictor
+from rfscan.scheduler.adaptive import AdaptiveScheduler
 from rfscan.scheduler.base import Scheduler
 from rfscan.scheduler.heuristic import HeuristicScheduler
 from rfscan.scheduler.sequential import RandomScheduler, SequentialScheduler
@@ -27,7 +31,11 @@ from rfscan.simulator.scenarios import list_scenarios, make_scenario
 
 log = get_logger("experiments.benchmark")
 
+# The three Phase 4 baselines. "adaptive" (Phase 6) is deliberately not part of
+# the default grid -- it needs a trained model artifact (`rfscan train`) or an
+# explicit `model.kind: beta` -- but is accepted when named explicitly.
 STRATEGIES = ("sequential", "random", "heuristic")
+VALID_STRATEGIES = STRATEGIES + ("adaptive",)
 
 _SUMMARY_METRICS = (
     "detection_rate",
@@ -52,9 +60,12 @@ class BenchmarkConfig:
     redundancy_window: int = 5
     heuristic_epsilon: float = 0.1
     results_dir: str = "artifacts/results"
+    model: ModelConfig = field(default_factory=ModelConfig)
+    scheduler_weights: SchedulerWeights = field(default_factory=SchedulerWeights)
+    belief: BeliefConfig = field(default_factory=BeliefConfig)
 
     def __post_init__(self) -> None:
-        unknown_strategies = set(self.strategies) - set(STRATEGIES)
+        unknown_strategies = set(self.strategies) - set(VALID_STRATEGIES)
         if unknown_strategies:
             raise ValueError(f"unknown strategies: {sorted(unknown_strategies)}")
         unknown_scenarios = set(self.scenarios) - set(list_scenarios())
@@ -69,7 +80,14 @@ class BenchmarkConfig:
 
 
 def build_scheduler(
-    name: str, n_channels: int, *, agent_seed: int, epsilon: float = 0.1
+    name: str,
+    n_channels: int,
+    *,
+    agent_seed: int,
+    epsilon: float = 0.1,
+    predictor: Predictor | None = None,
+    scheduler_weights: SchedulerWeights | None = None,
+    belief_config: BeliefConfig | None = None,
 ) -> Scheduler:
     if name == "sequential":
         return SequentialScheduler(n_channels)
@@ -77,11 +95,22 @@ def build_scheduler(
         return RandomScheduler(n_channels, seed=agent_seed)
     if name == "heuristic":
         return HeuristicScheduler(n_channels, epsilon=epsilon, seed=agent_seed)
+    if name == "adaptive":
+        if predictor is None:
+            raise ValueError("strategy 'adaptive' requires a predictor")
+        return AdaptiveScheduler(
+            n_channels,
+            predictor,
+            weights=scheduler_weights,
+            belief_config=belief_config,
+            seed=agent_seed,
+        )
     raise ValueError(f"unknown strategy {name!r}")
 
 
 def run_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
     """Execute the grid and return one metrics row per episode."""
+    predictor = load_predictor(config.model) if "adaptive" in config.strategies else None
     rows: list[dict] = []
     for scenario_name in config.scenarios:
         for world_seed in config.world_seeds:
@@ -95,6 +124,9 @@ def run_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
                     env.n_channels,
                     agent_seed=world_seed,
                     epsilon=config.heuristic_epsilon,
+                    predictor=predictor,
+                    scheduler_weights=config.scheduler_weights,
+                    belief_config=config.belief,
                 )
                 result = run_episode(
                     env, scheduler, budget=scenario.duration_slots, agent_seed=world_seed

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from rfscan.config import ModelConfig
 from rfscan.experiments.benchmark import (
     BenchmarkConfig,
     build_scheduler,
@@ -13,6 +14,8 @@ from rfscan.experiments.benchmark import (
     write_benchmark,
 )
 from rfscan.experiments.runner import run_episode
+from rfscan.models.baseline_beta import DecayingBetaPredictor
+from rfscan.scheduler.adaptive import AdaptiveScheduler
 from rfscan.scheduler.heuristic import HeuristicScheduler
 from rfscan.scheduler.sequential import RandomScheduler, SequentialScheduler
 from rfscan.simulator.scenarios import make_scenario
@@ -120,3 +123,33 @@ def test_full_seven_by_two_grid_executes_cleanly():
     # averaged across scenarios/seeds
     by_strat = raw.groupby("strategy")["on_target_scan_rate"].mean()
     assert by_strat["heuristic"] >= by_strat["sequential"]
+
+
+# -- Phase 6: adaptive strategy wiring -------------------------------
+def test_build_scheduler_adaptive_requires_a_predictor():
+    with pytest.raises(ValueError):
+        build_scheduler("adaptive", 12, agent_seed=0)
+
+
+def test_build_scheduler_adaptive_returns_adaptive_scheduler():
+    sched = build_scheduler(
+        "adaptive", 12, agent_seed=0, predictor=DecayingBetaPredictor()
+    )
+    assert isinstance(sched, AdaptiveScheduler)
+
+
+def test_config_accepts_adaptive_as_a_named_strategy():
+    BenchmarkConfig(strategies=("adaptive",))  # must not raise
+
+
+def test_run_benchmark_with_adaptive_using_the_beta_predictor():
+    config = BenchmarkConfig(
+        scenarios=("normal",),
+        world_seeds=(0,),
+        strategies=("random", "adaptive"),
+        duration_slots=120,
+        model=ModelConfig(kind="beta"),
+    )
+    raw = run_benchmark(config)
+    assert len(raw) == 2
+    assert set(raw["strategy"]) == {"random", "adaptive"}

@@ -651,6 +651,7 @@ class Phase5Result:
     calibration_csv: Path
     model_card_paths: list[Path]
     model_path: Path
+    candidate_model_paths: dict[str, Path]
 
 
 def run_phase5_pipeline(
@@ -696,6 +697,18 @@ def run_phase5_pipeline(
     model_out.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(fitted[chosen_name], model_out)
 
+    # Persist every bake-off candidate, not just the chosen one: Phase 6's
+    # AdaptiveScheduler picks its live predictor by closed-loop operational
+    # constraints (S16.6, latency in particular) that this offline bake-off
+    # never measures, so a candidate the bake-off didn't choose for *reporting*
+    # can still be the right one to *serve*. Purely additive -- model_out
+    # above (the reporting winner) is unchanged.
+    candidate_paths: dict[str, Path] = {}
+    for name, candidate in fitted.items():
+        path = model_out.parent / f"model_{name}.joblib"
+        joblib.dump(candidate, path)
+        candidate_paths[name] = path
+
     return Phase5Result(
         dataset=dataset,
         train=train,
@@ -709,4 +722,5 @@ def run_phase5_pipeline(
         calibration_csv=calibration_csv,
         model_card_paths=card_paths,
         model_path=model_out,
+        candidate_model_paths=candidate_paths,
     )
