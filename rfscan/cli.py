@@ -4,8 +4,8 @@
     rfscan benchmark            # Phase 4  - baseline strategy comparison grid -> CSV (works now)
     rfscan train                # Phase 5  - ML activity-prediction bake-off (works now)
     rfscan ablate               # Phase 8  - adaptive-scheduler component ablation (works now)
+    rfscan dashboard            # Phase 9  - launch the Streamlit dashboard             (works now)
     rfscan demo                 # Phase 12 - deterministic emerging-signal story
-    rfscan dashboard            # Phase 9  - launch the Streamlit dashboard
 
 Subcommands not yet implemented print the phase they land in and exit non-zero,
 so scripts fail loudly rather than silently no-op.
@@ -25,7 +25,6 @@ log = get_logger("cli")
 
 _NOT_READY = {
     "demo": 12,
-    "dashboard": 9,
 }
 
 
@@ -162,6 +161,17 @@ def _cmd_ablate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dashboard(_args: argparse.Namespace) -> int:
+    """Launch the Phase 9 Streamlit dashboard (app.py). A thin subprocess
+    wrapper -- all dashboard logic lives in rfscan.app.*; `streamlit run
+    app.py` remains the direct way to launch it too."""
+    import subprocess
+    import sys
+
+    log.info("launching Streamlit dashboard: streamlit run app.py")
+    return subprocess.call([sys.executable, "-m", "streamlit", "run", "app.py"])
+
+
 def _make_not_ready(name: str, phase: int) -> Callable[[argparse.Namespace], int]:
     def run(_args: argparse.Namespace) -> int:
         log.warning("`rfscan %s` is implemented in Phase %d - not available yet.", name, phase)
@@ -236,9 +246,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ablate_parser.set_defaults(func=_cmd_ablate)
 
+    sub.add_parser("dashboard", help="Phase 9: launch the Streamlit dashboard").set_defaults(
+        func=_cmd_dashboard
+    )
+
     help_text = {
         "demo": "Phase 12: run the deterministic emerging-signal demo",
-        "dashboard": "Phase 9: launch the Streamlit dashboard",
     }
     for name, phase in _NOT_READY.items():
         sub.add_parser(name, help=help_text[name]).set_defaults(func=_make_not_ready(name, phase))

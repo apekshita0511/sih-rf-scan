@@ -171,8 +171,16 @@ experiments/
   robustness.py    noise sweep + non-stationarity before/after analysis                    [Phase 8]
   plots.py         static matplotlib research plots (bars/lines + CI whiskers)             [Phase 8]
 
-visualization/plots.py    spectrum_bar, belief_band, priority_stack, scan_raster, ...      [Phase 9]
-app/dashboard.py          page shell + control sidebar + 7 sections                        [Phase 9]
+visualization/plots.py    Plotly: spectrum_bar, priority_breakdown_bar, scan_raster,       [Phase 9]
+                          strategy_comparison_bar, grouped_bar_by_scenario, line_by_level,
+                          emerging_timeline
+app/
+  live_simulation.py      LiveSimulation: thin stepper over the real engine, no new logic  [Phase 9]
+  data_loader.py          Phase 8 CSV loading, st.cache_data, graceful "missing" handling  [Phase 9]
+  components.py           format_metric, explanation_text, kpi_row, limitations_section    [Phase 9]
+  dashboard.py            8-tab page assembly (Live Sim, Strategy Cmp, Emerging Signal,     [Phase 9]
+                          Ablation, Robustness, Model Cmp, Limitations, About)
+app.py                    `streamlit run app.py` entrypoint (mirrors main.py's CLI wrapper) [Phase 9]
 
 configs/default.yaml      n_channels, slot_duration_s, budget, seeds, weights, model, ...
 main.py / rfscan.cli      CLI: info | train | benchmark | ablate | demo | dashboard
@@ -1049,3 +1057,99 @@ sample-size shrinkage is visible, never silent.
 weight tuning, no changes to `PriorityPolicy`/`BeliefState`'s formulas or to
 any completed Phase 1-7 decision logic — this phase measured the existing
 system, it did not redesign it.
+
+### 16.10 Phase 9 interactive Streamlit dashboard
+
+Turns the validated research engine into an explainable, interactive
+demonstration for an SIH judge — a consumer of the engine and of Phase 8's
+results, not a new engine. `streamlit run app.py` (or `rfscan dashboard`,
+now wired for real) launches it.
+
+**No second simulator, no duplicated scheduler logic.**
+`rfscan/app/live_simulation.py::LiveSimulation` is a thin, stateful stepper:
+every `step()` call runs exactly the same `select_next -> scan -> update ->
+env.step()` sequence `experiments.runner.run_episode` already uses, one slot
+at a time instead of a full episode, purely for interactive stepping.
+Verified, not assumed: a dedicated test runs `LiveSimulation` to completion
+and asserts its `scanned_channel`/`observed_detection`/`occupancy` arrays are
+byte-identical to a direct `run_episode` call on the same scenario/seed/
+strategy. `to_episode_result()` builds the same `EpisodeResult` shape
+`run_episode` produces (mirroring its ground-truth bookkeeping exactly) so
+`compute_episode_metrics` (Phase 4) works unmodified on a partial live
+episode via `partial_metrics()` — no redefined metrics, no invented numbers.
+
+**Ground truth stays separate, structurally.** `LiveSimulation.
+ground_truth_snapshot()` is a distinct method from the decision path;
+`select_next` is only ever called with `self.scanner.store` (a
+`ReadableStore`), never with anything ground-truth-bearing. Tested directly:
+a spy wraps the live scheduler's `select_next` and asserts the store it
+receives exposes none of `ground_truth`/`truth_snapshot`/`occupancy_
+snapshot`/`observe`/`step`. The dashboard labels every ground-truth display
+"Simulation Truth -- evaluation only" (`components.ground_truth_expander`,
+collapsed by default) and never feeds it back in.
+
+**"Why did we scan this channel?"** reuses Phase 6/7's own introspection
+unmodified: `AdaptiveScheduler.explain()` for the chosen channel's term
+breakdown, rendered via `plots.priority_breakdown_bar`, and
+`components.explanation_text` -- a plain function (no Streamlit dependency,
+directly unit-tested) that turns the real breakdown dict into a sentence by
+thresholding its own already-computed values (e.g. `pred > 0.3` ->
+"high predicted activity"). No baseline strategy has a breakdown to show;
+the panel says so rather than fabricating one.
+
+**Real-time metrics: "not enough data yet," never a fabricated number.**
+`components.format_metric` returns that exact string for `None`/NaN --
+Phase 4's own censoring convention, extended to a live partial episode
+(e.g. `mean_detection_delay_slots` before anything has been detected yet).
+
+**Phase 8 results are loaded, never recomputed.**
+`rfscan/app/data_loader.py` reads the CSVs `scripts/phase8_run_
+experiments.py` already wrote (git-ignored, S17), wrapped in `st.cache_data`
+so a Streamlit rerun (triggered by *any* widget interaction) doesn't reread
+disk. Every loader returns `None` on a missing file rather than raising --
+tested with both present and absent artifact directories -- so the
+dashboard shows "no data yet, run scripts/phase8_run_experiments.py" instead
+of crashing on a fresh clone (`artifacts/results/*` is not committed).
+
+**The Emerging Signal tab** reuses `experiments.adaptation.
+trace_adaptive_episode`/`emerging_adaptation_metrics` (Phase 7/8) directly
+via a `st.cache_data`-wrapped replay helper (`dashboard._cached_replay`,
+keyed on scenario/seed/strategy/budget) -- a full deterministic episode is
+computed once and a slider scrubs through the already-computed trace,
+rather than re-simulating on every slider move. Uses `DecayingBetaPredictor`
+for "adaptive" (zero I/O, works without a trained artifact), the same
+reasoning Phase 6/7's own tests use.
+
+**Honesty preserved in the UI, not just the CSVs.** The Strategy Comparison
+tab's exact required framing ("adaptive scanning improves scan efficiency
+and reduces redundant scans, but uniform sequential scanning remains
+stronger on raw coverage / detection speed") is shown as an `st.warning`
+directly above the numbers it describes, not buried. The Ablation tab
+states plainly that E vs F shows no large aggregate difference at this
+scale, alongside the redundant-scan-rate improvement the other variants do
+show. The Limitations tab (`components.limitations_section`, its own tab,
+never hidden) states the software-only scope, the frequency-agile
+limitation, the Turing dataset's non-integration, and the sustained-load
+latency caveat -- word for word the same claims as S16.6/S16.9, not a
+softened restatement.
+
+**Performance.** `st.cache_data` for all Phase 8 CSV reads and the emerging-
+signal replay; `st.session_state` (not caching) for the mutable
+`LiveSimulation` instance, since a live episode's state must persist across
+reruns without being treated as a pure, cacheable function of its inputs.
+`try_load_live_predictor()` (a real `logistic_regression` model, if the
+trained artifact exists) is loaded once into `st.session_state` at startup,
+not per-tab-render.
+
+**Testing, without a browser.** Every module's *pure* logic is unit-tested
+directly (`live_simulation.py`, `data_loader.py`, `components.py`,
+`visualization/plots.py`) with no Streamlit script-run context needed. One
+minimal smoke test uses Streamlit's own `streamlit.testing.v1.AppTest` to
+run the full `app.py` headlessly and assert it renders every tab without
+raising, plus that clicking "Step" advances the live episode -- broad
+end-to-end coverage from two tests, not a brittle pixel/rendering suite.
+
+**Scope discipline.** No authentication, cloud deployment, database, or REST
+API; no changes to `AdaptiveScheduler`/`PriorityPolicy`/`BeliefState` or to
+any Phase 1-8 metric definition; Phase 8's historical CSVs are read-only
+inputs, never regenerated or edited by this phase. No Phase 10/11 work.

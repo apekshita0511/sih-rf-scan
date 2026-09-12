@@ -38,7 +38,7 @@ def test_info_runs_with_shipped_config(capsys):
     assert "13 channels" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("cmd", ["demo", "dashboard"])
+@pytest.mark.parametrize("cmd", ["demo"])
 def test_not_ready_commands_return_nonzero(cmd):
     assert main([cmd]) == 3
 
@@ -146,3 +146,23 @@ def test_ablate_command_end_to_end(tmp_path, monkeypatch, capsys):
     assert "ablation_raw.csv" in out
     assert (tmp_path / "artifacts" / "results" / "ablation_raw.csv").exists()
     assert (tmp_path / "artifacts" / "results" / "ablation_summary.csv").exists()
+
+
+def test_dashboard_is_wired_as_a_real_subcommand():
+    # dashboard is implemented as of Phase 9 -- it must NOT be a not-ready stub.
+    from rfscan.cli import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["dashboard"])
+    assert args.func.__name__ == "_cmd_dashboard"
+
+
+def test_dashboard_command_invokes_streamlit_via_subprocess(monkeypatch):
+    import sys
+
+    calls = []
+    monkeypatch.setattr(
+        "subprocess.call", lambda cmd: calls.append(cmd) or 0
+    )
+    assert main(["dashboard"]) == 0
+    assert calls == [[sys.executable, "-m", "streamlit", "run", "app.py"]]

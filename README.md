@@ -2,24 +2,21 @@
 
 **Smart India Hackathon 2026 · Problem SIH26055 — Smart Scan Strategy for Electronic Warfare · DRDO · Software**
 
-> **Build status: Phase 8 of 13 complete** — stochastic RF simulator, sensor + memory +
-> baseline strategies, the reproducible-evaluation foundation, an ML prediction pipeline
-> (17-feature `FeatureBuilder`, calibrated Logistic Regression / HistGradientBoosting, a
-> real bake-off via `rfscan train`), the **AdaptiveScheduler** (decaying-Beta `BeliefState`,
-> weighted multi-objective `PriorityPolicy`, hard freshness guarantee) with observable,
-> proven online feedback and emerging-signal adaptation (Phase 7), and now a **full
-> experimental validation** (Phase 8): a 1,880-episode paired benchmark grid (7 scenarios
-> × 30 seeds × 4 strategies), a 6-variant priority-component ablation, a controlled noise
-> sweep, a non-stationarity study, and a 3-predictor downstream comparison — all with
-> paired significance testing (t-test + Wilcoxon, bootstrap CIs) via `rfscan ablate` and
-> `scripts/phase8_*.py`. Honest, mixed result, not a clean win: adaptive uses its scan
-> budget ~3x more efficiently than naive baselines (scan efficiency, on-target rate) and
-> is far less wasteful than the heuristic baseline (redundant-scan rate), but loses to a
-> blind uniform sweep on raw detection rate and delay, and its efficiency edge **reverses**
-> in the densest scenario. Live serving uses Logistic Regression (~1.1 ms/slot in
-> controlled tests; HistGradientBoosting, the offline bake-off winner, exceeds the 5 ms
-> budget at ~3.8-5.4 ms) — see `docs/architecture.md` S16.6/S16.9 for the full numbers,
-> including a latency caveat found under sustained load, reported rather than hidden.
+> **Build status: Phase 9 of 13 complete** — stochastic RF simulator, sensor + memory +
+> baseline strategies, an ML prediction pipeline, the **AdaptiveScheduler** with proven
+> online feedback and emerging-signal adaptation (Phases 6-7), a **full experimental
+> validation** (Phase 8: a 1,880-episode paired benchmark grid, a 6-variant ablation, noise
+> and non-stationarity robustness sweeps, a 3-predictor comparison, all with paired
+> significance testing) — honest, mixed result, not a clean win: adaptive uses its scan
+> budget ~3x more efficiently than naive baselines but loses to a blind uniform sweep on
+> raw detection rate/delay, and its efficiency edge **reverses** in the densest scenario
+> (see `docs/architecture.md` S16.9) — and now an **interactive Streamlit dashboard**
+> (Phase 9, `streamlit run app.py`): a live, steppable simulation using the real engine
+> (no second simulator), a per-decision "why did we scan this channel?" explanation panel,
+> and pages for every Phase 8 result (strategy comparison, emerging-signal replay,
+> ablation, robustness, predictor comparison), plus a visible Limitations page. See
+> `docs/architecture.md` S16.10 for the dashboard's design and S16.6/S16.9 for the full
+> Phase 6-8 numbers.
 > Full documentation lands in Phase 13. See [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ---
@@ -67,8 +64,8 @@ rfscan benchmark                         # baseline strategy grid -> CSV        
 rfscan benchmark --seeds 10              #   ... over world seeds 0..9
 rfscan train                             # ML model bake-off                      (available now)
 rfscan ablate                            # Phase 8  — scheduler component ablation  (available now)
+rfscan dashboard                         # Phase 9  — Streamlit dashboard            (available now)
 rfscan demo                              # Phase 12 — emerging-signal demo
-rfscan dashboard                         # Phase 9  — Streamlit dashboard
 ```
 
 `rfscan benchmark` runs all 7 scenarios x N seeds x {sequential, random, heuristic}
@@ -91,6 +88,17 @@ ablation_raw.csv` / `ablation_summary.csv`. The full Phase 8 experiment suite
 comparison, statistics, plots) is reproduced via `scripts/phase8_run_
 experiments.py` then `scripts/phase8_analyze.py` — see `docs/architecture.md`
 S16.9 for the full results and methodology.
+
+`rfscan dashboard` (equivalently, `streamlit run app.py`) launches the Phase 9
+interactive dashboard in your browser: a live, steppable simulation using the
+real engine (any scenario/seed/strategy), a per-decision "why did we scan
+this channel?" explanation panel, and pages for strategy comparison,
+emerging-signal replay, ablation, robustness, predictor comparison, and a
+visible Limitations page. It reads Phase 8's result CSVs from
+`artifacts/results/` if present (falling back to a "no data yet, run
+scripts/phase8_run_experiments.py" message otherwise) and never reruns the
+1,880-episode experiment suite itself. See `docs/architecture.md` S16.10 for
+the dashboard's design.
 
 `python main.py <command>` is equivalent to `rfscan <command>`.
 
@@ -117,10 +125,15 @@ rfscan/
                   emerging-signal adaptation metrics + priority tracing (Phase 7);
                   ablation, bootstrap CI + paired significance tests, noise/
                   non-stationarity robustness sweeps, static analysis plots (Phase 8)
-  visualization/  Plotly figure builders (Phase 9)
-  app/            Streamlit dashboard (Phase 9)
+  visualization/  Plotly figure builders for the dashboard (Phase 9)
+  app/            Streamlit dashboard: data_loader, live_simulation (wraps the
+                  real engine, no second simulator), components, dashboard.py
+                  (Phase 9)
   config.py       AppConfig tree + YAML load/dump
   cli.py          command-line entry point
+app.py            Streamlit entrypoint: `streamlit run app.py` (Phase 9)
+scripts/          one-off, reproducible experiment scripts (not part of the
+                  package): phase8_run_experiments.py, phase8_analyze.py
 configs/          default.yaml + per-scenario configs
 tests/            pytest suite
 docs/             architecture.md, sih_pitch.md (Phase 13)
@@ -139,7 +152,7 @@ artifacts/        trained models + experiment results (git-ignored)
 | 6  | Adaptive scheduler v1 (thin end-to-end loop) | ✅ |
 | 7  | Online feedback + emerging-signal adaptation | ✅ |
 | 8  | Full benchmark grid + ablation + robustness | ✅ |
-| 9  | Streamlit dashboard | ⬜ |
+| 9  | Streamlit dashboard | ✅ |
 | 10 | Test hardening | ⬜ |
 | 11 | Optimization + weight tuning | ⬜ |
 | 12 | Deterministic SIH demo | ⬜ |
