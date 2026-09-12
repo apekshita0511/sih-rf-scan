@@ -13,6 +13,11 @@ channel -- including a future emerging one -- can be starved forever. Default
 ``3 * n_channels`` bounds the worst-case revisit interval to about three
 full round-robin sweeps' worth of slots, well inside what the emerging-signal
 scenarios (S9) run for.
+
+``freeze_belief`` (Phase 8, S16.8): when True, ``update()`` never touches
+``BeliefState`` -- the belief stays at the prior forever, isolating "does
+online feedback matter" for the ablation study without a second scheduler
+implementation. Default False changes nothing about Phase 6/7 behaviour.
 """
 
 from __future__ import annotations
@@ -47,11 +52,13 @@ class AdaptiveScheduler:
         max_revisit_slots: int | None = None,
         redundancy_tau_slots: float = 5.0,
         seed: int = 0,
+        freeze_belief: bool = False,
     ) -> None:
         if n_channels < 1:
             raise ValueError(f"n_channels must be >= 1, got {n_channels}")
         self._n = n_channels
         self._predictor = predictor
+        self._freeze_belief = freeze_belief
         self._weights = weights or SchedulerWeights()
         self._belief_config = belief_config or BeliefConfig()
         self._seed = int(seed)
@@ -116,7 +123,8 @@ class AdaptiveScheduler:
         return choice
 
     def update(self, record: ScanRecord) -> None:
-        self._belief.update(record.channel_index, record.detected)
+        if not self._freeze_belief:
+            self._belief.update(record.channel_index, record.detected)
 
     def explain(self) -> Mapping[str, float]:
         return dict(self._last)

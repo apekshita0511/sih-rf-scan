@@ -55,6 +55,22 @@ from rfscan.experiments.runner import EpisodeResult
 
 DEFAULT_REDUNDANCY_WINDOW = 5
 
+# The metric columns worth a mean/std/count summary row (benchmark.py,
+# ablation.py, robustness.py all group on these -- one shared list so the set
+# of "headline" metrics can't silently drift between them).
+SUMMARY_METRICS = (
+    "detection_rate",
+    "missed_detection_rate",
+    "mean_detection_delay_slots",
+    "time_to_first_detection_slots",
+    "emerging_discovery_delay_slots",
+    "on_target_scan_rate",
+    "scan_efficiency",
+    "redundant_scan_rate",
+    "channel_coverage",
+    "coverage_time_slots",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ActivityInterval:

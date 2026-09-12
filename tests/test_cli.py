@@ -38,7 +38,7 @@ def test_info_runs_with_shipped_config(capsys):
     assert "13 channels" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("cmd", ["ablate", "demo", "dashboard"])
+@pytest.mark.parametrize("cmd", ["demo", "dashboard"])
 def test_not_ready_commands_return_nonzero(cmd):
     assert main([cmd]) == 3
 
@@ -113,3 +113,36 @@ def test_train_command_end_to_end(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "artifacts" / "results" / "model_bakeoff.csv").exists()
     assert (tmp_path / "artifacts" / "model.joblib").exists()
     assert (tmp_path / "docs" / "model_cards" / "logistic_regression.md").exists()
+
+
+def test_ablate_is_wired_as_a_real_subcommand(capsys):
+    # ablate is implemented as of Phase 8 -- it must NOT be a not-ready stub.
+    from rfscan.cli import build_parser
+
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["ablate", "--help"])
+    assert exc.value.code == 0
+    assert "--seeds" in capsys.readouterr().out
+
+
+def test_ablate_command_end_to_end(tmp_path, monkeypatch, capsys):
+    """Smallest real run: 1 scenario, 1 seed, tiny episodes, the real ablation logic."""
+    monkeypatch.chdir(tmp_path)
+    from rfscan.experiments import ablation as ablation_mod
+    from rfscan.models import loader as loader_mod
+    from rfscan.models.baseline_beta import DecayingBetaPredictor
+
+    real_run = ablation_mod.run_ablation
+
+    def _tiny_run(predictor, *, world_seeds=(0,), duration_slots=None, **_kwargs):
+        return real_run(predictor, scenarios=("normal",), world_seeds=(0,), duration_slots=20)
+
+    monkeypatch.setattr(ablation_mod, "run_ablation", _tiny_run)
+    monkeypatch.setattr(loader_mod, "load_predictor", lambda cfg: DecayingBetaPredictor())
+
+    assert main(["ablate", "--seeds", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "ablation_raw.csv" in out
+    assert (tmp_path / "artifacts" / "results" / "ablation_raw.csv").exists()
+    assert (tmp_path / "artifacts" / "results" / "ablation_summary.csv").exists()

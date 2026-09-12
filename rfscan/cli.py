@@ -3,7 +3,7 @@
     rfscan info                 # show resolved config + channel plan (works now)
     rfscan benchmark            # Phase 4  - baseline strategy comparison grid -> CSV (works now)
     rfscan train                # Phase 5  - ML activity-prediction bake-off (works now)
-    rfscan ablate               # Phase 8  - adaptive-scheduler component ablation
+    rfscan ablate               # Phase 8  - adaptive-scheduler component ablation (works now)
     rfscan demo                 # Phase 12 - deterministic emerging-signal story
     rfscan dashboard            # Phase 9  - launch the Streamlit dashboard
 
@@ -24,7 +24,6 @@ from rfscan.simulator.channel import build_channel_plan
 log = get_logger("cli")
 
 _NOT_READY = {
-    "ablate": 8,
     "demo": 12,
     "dashboard": 9,
 }
@@ -127,6 +126,42 @@ def _cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ablate(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from rfscan.experiments.ablation import ABLATION_VARIANTS, run_ablation, summarize_ablation
+    from rfscan.models.loader import load_predictor
+    from rfscan.simulator.scenarios import list_scenarios
+
+    config = load_config(args.config)
+    predictor = load_predictor(config.model)
+    world_seeds = tuple(range(args.seeds))
+    log.info(
+        "ablation: %d scenarios x %d seeds x %d variants",
+        len(list_scenarios()),
+        len(world_seeds),
+        len(ABLATION_VARIANTS),
+    )
+    raw = run_ablation(predictor, world_seeds=world_seeds, duration_slots=args.duration_slots)
+    summary = summarize_ablation(raw)
+
+    out_dir = Path(config.experiment.results_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = out_dir / "ablation_raw.csv"
+    summary_path = out_dir / "ablation_summary.csv"
+    raw.to_csv(raw_path, index=False)
+    summary.to_csv(summary_path, index=False)
+    print(f"wrote {raw_path}  ({len(raw)} episode rows)")
+    print(f"wrote {summary_path}")
+
+    pivot = raw.pivot_table(
+        index="scenario", columns="variant", values="detection_rate", aggfunc="mean"
+    )
+    print("\nmean interval detection rate (per scenario x variant):")
+    print(pivot.to_string(float_format=lambda x: f"{x:.3f}"))
+    return 0
+
+
 def _make_not_ready(name: str, phase: int) -> Callable[[argparse.Namespace], int]:
     def run(_args: argparse.Namespace) -> int:
         log.warning("`rfscan %s` is implemented in Phase %d - not available yet.", name, phase)
@@ -182,8 +217,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_parser.set_defaults(func=_cmd_train)
 
+    ablate_parser = sub.add_parser(
+        "ablate", help="Phase 8: run the adaptive-scheduler component ablation"
+    )
+    ablate_parser.add_argument(
+        "--seeds",
+        type=int,
+        default=15,
+        metavar="N",
+        help="number of world seeds, 0..N-1 (default: 15)",
+    )
+    ablate_parser.add_argument(
+        "--duration-slots",
+        type=int,
+        default=None,
+        metavar="N",
+        help="override each scenario's episode length (default: each scenario's own, 800)",
+    )
+    ablate_parser.set_defaults(func=_cmd_ablate)
+
     help_text = {
-        "ablate": "Phase 8: run the adaptive-scheduler component ablation",
         "demo": "Phase 12: run the deterministic emerging-signal demo",
         "dashboard": "Phase 9: launch the Streamlit dashboard",
     }

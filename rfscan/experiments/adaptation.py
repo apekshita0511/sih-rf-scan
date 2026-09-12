@@ -34,6 +34,32 @@ from rfscan.scheduler.adaptive import AdaptiveScheduler
 from rfscan.simulator.environment import RFEnvironment
 
 
+def channel_scan_split(
+    result: EpisodeResult, channel: int, split_slot: int
+) -> tuple[int, int, int, int]:
+    """Scans and detections on ``channel`` strictly before vs. from
+    ``split_slot`` onward: ``(scans_before, scans_after, detections_before,
+    detections_after)``. Shared by :func:`emerging_adaptation_metrics`
+    (split = an EMERGING emitter's activation slot) and Phase 8's
+    non-stationarity analysis (split = a scenario's flip slot) -- the same
+    "count what happened on one channel either side of one slot" operation,
+    reused rather than duplicated."""
+    scanned = result.scanned_channel
+    detected = result.observed_detection
+    on_channel = scanned == channel
+    slot_index = np.arange(result.n_slots)
+
+    before = on_channel & (slot_index < split_slot)
+    after = on_channel & (slot_index >= split_slot)
+
+    return (
+        int(np.count_nonzero(before)),
+        int(np.count_nonzero(after)),
+        int(np.count_nonzero(before & detected)),
+        int(np.count_nonzero(after & detected)),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class EmergingAdaptationMetrics:
     """Scan behaviour on the scenario's first EMERGING channel, split at its
@@ -64,18 +90,9 @@ def emerging_adaptation_metrics(
     channel = result.emerging_channels[0]
     activation = result.emerging_activation_slots[0]
 
-    scanned = result.scanned_channel
-    detected = result.observed_detection
-    on_channel = scanned == channel
-    slot_index = np.arange(result.n_slots)
-
-    before = on_channel & (slot_index < activation)
-    after = on_channel & (slot_index >= activation)
-
-    scans_before = int(np.count_nonzero(before))
-    scans_after = int(np.count_nonzero(after))
-    det_before = int(np.count_nonzero(before & detected))
-    det_after = int(np.count_nonzero(after & detected))
+    scans_before, scans_after, det_before, det_after = channel_scan_split(
+        result, channel, activation
+    )
 
     return EmergingAdaptationMetrics(
         channel=channel,

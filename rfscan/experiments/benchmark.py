@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from rfscan.config import BeliefConfig, ModelConfig, SchedulerWeights
-from rfscan.experiments.metrics import compute_episode_metrics
+from rfscan.experiments.metrics import SUMMARY_METRICS, compute_episode_metrics
 from rfscan.experiments.runner import run_episode
 from rfscan.logging_config import get_logger
 from rfscan.models.base import Predictor
@@ -37,18 +37,7 @@ log = get_logger("experiments.benchmark")
 STRATEGIES = ("sequential", "random", "heuristic")
 VALID_STRATEGIES = STRATEGIES + ("adaptive",)
 
-_SUMMARY_METRICS = (
-    "detection_rate",
-    "missed_detection_rate",
-    "mean_detection_delay_slots",
-    "time_to_first_detection_slots",
-    "emerging_discovery_delay_slots",
-    "on_target_scan_rate",
-    "scan_efficiency",
-    "redundant_scan_rate",
-    "channel_coverage",
-    "coverage_time_slots",
-)
+_SUMMARY_METRICS = SUMMARY_METRICS  # backward-compat alias; see metrics.py
 
 
 @dataclass(frozen=True, slots=True)
