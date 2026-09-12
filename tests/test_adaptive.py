@@ -171,6 +171,43 @@ def test_all_breakdowns_covers_every_channel_not_just_the_chosen_one():
     assert breakdowns[choice].priority == pytest.approx(sched.explain()["priority"])
 
 
+def test_predicted_proba_snapshot_matches_the_real_predictor_output():
+    predictor = _PerChannelPredictor([0.2, 0.7, 0.1])
+    sched = AdaptiveScheduler(3, predictor, seed=0)
+    store = ObservationStore(3)
+    sched.select_next(store, 0)
+    snapshot = sched.predicted_proba_snapshot()
+    assert list(snapshot) == pytest.approx([0.2, 0.7, 0.1])
+
+
+def test_predicted_proba_snapshot_is_independent_of_w_pred_weight():
+    """Deliberately distinct from PriorityBreakdown.pred (= w_pred *
+    predicted_proba): must read the raw probability back correctly even when
+    w_pred != 1, unlike relying on the pred term itself."""
+    predictor = _PerChannelPredictor([0.4, 0.4, 0.4])
+    weights = SchedulerWeights(w_pred=5.0, w_explore=0, w_fresh=0, w_trend=0, w_redundancy=0)
+    sched = AdaptiveScheduler(3, predictor, weights=weights, seed=0)
+    store = ObservationStore(3)
+    sched.select_next(store, 0)
+    assert list(sched.predicted_proba_snapshot()) == pytest.approx([0.4, 0.4, 0.4])
+    # the weighted breakdown term is NOT the raw probability
+    assert sched.all_breakdowns()[0].pred == pytest.approx(2.0)
+
+
+def test_predicted_proba_snapshot_is_empty_before_the_first_decision():
+    sched = AdaptiveScheduler(3, _ConstantPredictor(0.0), seed=0)
+    assert list(sched.predicted_proba_snapshot()) == []
+
+
+def test_predicted_proba_snapshot_resets():
+    predictor = _PerChannelPredictor([0.2, 0.7, 0.1])
+    sched = AdaptiveScheduler(3, predictor, seed=0)
+    store = ObservationStore(3)
+    sched.select_next(store, 0)
+    sched.reset()
+    assert list(sched.predicted_proba_snapshot()) == []
+
+
 def test_all_breakdowns_is_empty_before_the_first_decision():
     sched = AdaptiveScheduler(3, _ConstantPredictor(0.0), seed=0)
     assert sched.all_breakdowns() == []

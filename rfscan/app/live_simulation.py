@@ -17,6 +17,7 @@ a ``ReadableStore``).
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -156,6 +157,30 @@ class LiveSimulation:
         self.env.step()
         return record
 
+    def run_slots(self, n: int, *, on_slot: Callable[[int], None] | None = None) -> int:
+        """Call :meth:`step` up to ``n`` times (fewer if the episode ends
+        first). ``on_slot(slots_done)`` fires after each step, e.g. for a
+        progress bar -- purely a side effect, changes no decision. Returns
+        the number of slots actually advanced. Passing ``n >= budget`` is
+        exactly "Run to end"."""
+        advanced = 0
+        for _ in range(n):
+            if self.step() is None:
+                break
+            advanced += 1
+            if on_slot is not None:
+                on_slot(advanced)
+        return advanced
+
+    def predicted_proba_snapshot(self) -> np.ndarray | None:
+        """Raw predicted P(active) per channel from the most recent
+        decision (S16.6's ``AdaptiveScheduler.predicted_proba_snapshot``),
+        only when the live scheduler is an AdaptiveScheduler; None
+        otherwise (baselines have no predictor)."""
+        if isinstance(self.scheduler, AdaptiveScheduler):
+            return self.scheduler.predicted_proba_snapshot()
+        return None
+
     def all_breakdowns(self):
         """Every channel's PriorityBreakdown (S16.7 introspection), only
         when the live scheduler is an AdaptiveScheduler; None otherwise."""
@@ -220,3 +245,34 @@ class LiveSimulation:
         if result is None:
             return None
         return compute_episode_metrics(result)
+
+
+def compare_strategies_same_world(
+    scenario_name: str,
+    world_seed: int,
+    budget: int,
+    *,
+    strategies: Sequence[str] = STRATEGIES,
+    predictor: Predictor | None = None,
+) -> dict[str, EpisodeMetrics]:
+    """Run every strategy in ``strategies`` to completion against the SAME
+    ``(scenario_name, world_seed)`` world realisation -- each ``LiveSimulation``
+    independently calls ``make_scenario(...).build_environment(world_seed)``,
+    the same deterministic construction ``experiments.benchmark.run_benchmark``
+    uses for its own paired-world fairness (S2/S9), so every strategy here
+    faces a byte-identical world. A single small, fresh comparison for the
+    live demo -- does not touch Phase 8's CSVs or its 1,880-episode suite."""
+    results: dict[str, EpisodeMetrics] = {}
+    for strategy in strategies:
+        sim = LiveSimulation(
+            scenario_name,
+            world_seed=world_seed,
+            strategy_name=strategy,
+            budget=budget,
+            predictor=predictor if strategy_requires_predictor(strategy) else None,
+        )
+        sim.run_slots(budget)
+        metrics = sim.partial_metrics()
+        assert metrics is not None  # budget >= 1 guarantees at least one step ran
+        results[strategy] = metrics
+    return results

@@ -81,11 +81,13 @@ class AdaptiveScheduler:
         self._rng = np.random.default_rng(self._seed)
         self._last: dict[str, float] = {}
         self._last_breakdowns: list[PriorityBreakdown] = []
+        self._last_predicted: np.ndarray = np.array([])
 
     def select_next(self, store: ReadableStore, slot: int) -> int:
         self._belief.decay()
         features = self._feature_builder.build(store, slot)
         predicted = np.asarray(self._predictor.predict_proba(features), dtype=np.float64)
+        self._last_predicted = predicted
         uncertainty = self._belief.std()
         staleness = features[:, _STALENESS_COL]
         trend = features[:, _TREND_COL]
@@ -151,8 +153,20 @@ class AdaptiveScheduler:
         same rationale as :meth:`all_breakdowns`."""
         return self._belief.mean(), self._belief.std()
 
+    def predicted_proba_snapshot(self) -> np.ndarray:
+        """The raw ``Predictor.predict_proba`` output from the most recent
+        :meth:`select_next` call, shape ``(n_channels,)`` -- e.g. for a "Predicted
+        activity: NN%" display. Deliberately separate from
+        ``PriorityBreakdown.pred`` (``w_pred * predicted_proba``, S7): reading
+        it back out here is correct regardless of what ``w_pred`` happens to
+        be, rather than relying on today's default of 1.0. Read-only
+        introspection, same rationale as :meth:`all_breakdowns`; changes
+        nothing about the decision itself."""
+        return self._last_predicted.copy()
+
     def reset(self) -> None:
         self._belief.reset()
         self._rng = np.random.default_rng(self._seed)
         self._last = {}
         self._last_breakdowns = []
+        self._last_predicted = np.array([])

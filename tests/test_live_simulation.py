@@ -13,9 +13,11 @@ from rfscan.app.live_simulation import (
     STRATEGIES,
     LiveSimulation,
     available_scenarios,
+    compare_strategies_same_world,
     default_predictor,
     strategy_requires_predictor,
 )
+from rfscan.models.baseline_beta import DecayingBetaPredictor
 from rfscan.scheduler.adaptive import AdaptiveScheduler
 
 
@@ -200,3 +202,96 @@ def test_partial_metrics_grows_with_more_steps():
     late = sim.partial_metrics()
     assert early.n_slots == 5
     assert late.n_slots == 30
+
+
+# -- run_slots (automatic multi-slot run) --------------------------------
+def test_run_slots_advances_exactly_n_and_returns_the_count():
+    sim = LiveSimulation("normal", world_seed=0, strategy_name="sequential", budget=100)
+    advanced = sim.run_slots(25)
+    assert advanced == 25
+    assert sim.slot == 25
+
+
+def test_run_slots_stops_at_the_episode_budget():
+    sim = LiveSimulation("normal", world_seed=0, strategy_name="sequential", budget=10)
+    advanced = sim.run_slots(50)  # ask for more than the budget
+    assert advanced == 10
+    assert sim.slot == 10
+    assert sim.done
+
+
+def test_run_slots_calls_on_slot_once_per_advanced_slot_in_order():
+    sim = LiveSimulation("normal", world_seed=0, strategy_name="sequential", budget=20)
+    seen = []
+    sim.run_slots(7, on_slot=seen.append)
+    assert seen == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_run_slots_matches_calling_step_the_same_number_of_times():
+    sim_a = LiveSimulation("bursty", world_seed=3, strategy_name="adaptive", budget=40)
+    for _ in range(15):
+        sim_a.step()
+
+    sim_b = LiveSimulation("bursty", world_seed=3, strategy_name="adaptive", budget=40)
+    sim_b.run_slots(15)
+
+    assert sim_a.slot == sim_b.slot == 15
+    picks_a = [r.channel_index for r in sim_a.history]
+    picks_b = [r.channel_index for r in sim_b.history]
+    assert picks_a == picks_b
+
+
+# -- predicted_proba_snapshot passthrough --------------------------------
+def test_predicted_proba_snapshot_available_only_for_adaptive():
+    adaptive_sim = LiveSimulation("normal", world_seed=0, strategy_name="adaptive", budget=5)
+    adaptive_sim.step()
+    proba = adaptive_sim.predicted_proba_snapshot()
+    assert proba is not None
+    assert proba.shape == (adaptive_sim.n_channels,)
+
+    seq_sim = LiveSimulation("normal", world_seed=0, strategy_name="sequential", budget=5)
+    seq_sim.step()
+    assert seq_sim.predicted_proba_snapshot() is None
+
+
+# -- compare_strategies_same_world ---------------------------------------
+def test_compare_strategies_same_world_returns_metrics_for_every_strategy():
+    results = compare_strategies_same_world(
+        "normal", world_seed=0, budget=50, predictor=DecayingBetaPredictor()
+    )
+    assert set(results.keys()) == set(STRATEGIES)
+    for metrics in results.values():
+        assert metrics.n_slots == 50
+
+
+def test_compare_strategies_same_world_uses_an_identical_world_per_strategy():
+    """Paired-world fairness (S2/S9): every strategy must face the same
+    ground-truth realisation -- checked the same way test_benchmark.py and
+    test_ablation.py already do, via each LiveSimulation's own world."""
+    results = {}
+    for strategy in STRATEGIES:
+        sim = LiveSimulation(
+            "dynamic",
+            world_seed=4,
+            strategy_name=strategy,
+            budget=60,
+            predictor=DecayingBetaPredictor() if strategy_requires_predictor(strategy) else None,
+        )
+        sim.run_slots(60)
+        results[strategy] = sim.to_episode_result().occupancy
+
+    baseline = results[STRATEGIES[0]]
+    for strategy, occupancy in results.items():
+        assert np.array_equal(occupancy, baseline), f"{strategy} saw a different world"
+
+
+def test_compare_strategies_same_world_is_deterministic():
+    a = compare_strategies_same_world(
+        "normal", world_seed=1, budget=30, predictor=DecayingBetaPredictor()
+    )
+    b = compare_strategies_same_world(
+        "normal", world_seed=1, budget=30, predictor=DecayingBetaPredictor()
+    )
+    for strategy in STRATEGIES:
+        assert a[strategy].detection_rate == b[strategy].detection_rate
+        assert a[strategy].scan_efficiency == b[strategy].scan_efficiency

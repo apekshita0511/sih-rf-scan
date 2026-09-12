@@ -25,21 +25,18 @@ def format_metric(value: float | None, *, fmt: str = "{:.3f}", unit: str = "") -
     return fmt.format(value) + unit
 
 
-def explanation_text(breakdown: dict, channel_label: str) -> str:
-    """Human-readable explanation of an AdaptiveScheduler's channel choice,
-    built only from the real ``PriorityBreakdown``/``explain()`` values
+def explanation_reasons(breakdown: dict) -> list[str]:
+    """Short, lowercase reason phrases for why a channel was selected, built
+    only from the real ``PriorityBreakdown``/``explain()`` values
     (docs/architecture.md S16.6/S16.7) -- no invented numbers, no ground
-    truth. ``breakdown`` empty or absent (a baseline strategy) gets a plain
-    fallback sentence."""
-    if not breakdown:
-        return f"Selected {channel_label}. This strategy has no decision breakdown to show."
-
-    if breakdown.get("forced_freshness"):
-        return (
-            f"{channel_label} was force-scanned by the hard freshness guarantee -- "
-            "it had gone unscanned too long, regardless of its predicted priority."
-        )
-
+    truth. Empty list for an empty/absent breakdown or the forced-freshness
+    case (both have their own dedicated phrasing in :func:`explanation_text`
+    and the caller's "Reason:" display). Shared source of truth for both
+    :func:`explanation_text` (joined into a sentence) and the dashboard's
+    standalone "Reason:" line (the first, most salient phrase, capitalised
+    there -- capitalisation is a display concern, not this function's)."""
+    if not breakdown or breakdown.get("forced_freshness"):
+        return []
     reasons = []
     pred = breakdown.get("pred")
     explore = breakdown.get("explore")
@@ -56,7 +53,38 @@ def explanation_text(breakdown: dict, channel_label: str) -> str:
         reasons.append("shows a rising activity trend")
     if redundancy is not None and redundancy < -0.05:
         reasons.append("was recently confirmed empty (penalised, but still chosen)")
+    return reasons
 
+
+def explanation_headline(breakdown: dict) -> str:
+    """The single most salient reason, capitalised, for a compact "Reason:"
+    line (e.g. "High predicted activity", "Freshness guarantee -- channel
+    had not been scanned recently"). Falls back to a neutral phrase when
+    several terms are balanced or the breakdown is empty."""
+    if breakdown and breakdown.get("forced_freshness"):
+        return "Freshness guarantee -- channel had not been scanned recently"
+    reasons = explanation_reasons(breakdown)
+    if not reasons:
+        return "Balanced combination of prediction, exploration, freshness, and trend"
+    first = reasons[0]
+    return first[0].upper() + first[1:]
+
+
+def explanation_text(breakdown: dict, channel_label: str) -> str:
+    """Human-readable explanation of an AdaptiveScheduler's channel choice,
+    built only from the real ``PriorityBreakdown``/``explain()`` values --
+    no invented numbers, no ground truth. ``breakdown`` empty or absent (a
+    baseline strategy) gets a plain fallback sentence."""
+    if not breakdown:
+        return f"Selected {channel_label}. This strategy has no decision breakdown to show."
+
+    if breakdown.get("forced_freshness"):
+        return (
+            f"{channel_label} was force-scanned by the hard freshness guarantee -- "
+            "it had gone unscanned too long, regardless of its predicted priority."
+        )
+
+    reasons = explanation_reasons(breakdown)
     reason_text = ", and ".join(reasons) if reasons else (
         "a balanced combination of prediction, exploration, freshness, and trend"
     )
@@ -121,7 +149,7 @@ def kpi_row(metrics: dict[str, float | None], *, formats: dict[str, str] | None 
 def ground_truth_expander(occupancy: tuple, channel_labels: list[str]) -> None:
     """Collapsed by default -- ground truth is for demonstration only and
     must never be mistaken for what the scheduler can see."""
-    with st.expander("Simulation Truth -- evaluation only (never shown to the scheduler)"):
+    with st.expander("Simulation Truth -- evaluation only, never shown to the scheduler"):
         st.caption(
             "Which channels are truly active right now, for demonstration purposes "
             "only. The scheduler above never receives this -- it only ever sees noisy "
@@ -130,6 +158,17 @@ def ground_truth_expander(occupancy: tuple, channel_labels: list[str]) -> None:
         cols = st.columns(len(channel_labels))
         for col, label, occ in zip(cols, channel_labels, occupancy, strict=True):
             col.metric(label, "ACTIVE" if occ else "quiet")
+
+
+def decision_pipeline_caption() -> None:
+    """Compact OBSERVE -> ... -> ADAPT closed-loop visual with the
+    PRIORITIZE terms spelled out (docs/architecture.md S1.2/S7) -- two lines
+    of caption text, not a diagram library, per this project's "no
+    decorative graphics" design rule."""
+    st.caption("OBSERVE → PREDICT → PRIORITIZE → SCAN → LEARN → ADAPT")
+    st.caption(
+        "PRIORITIZE = prediction + exploration + freshness + trend − redundancy"
+    )
 
 
 def limitations_section() -> None:

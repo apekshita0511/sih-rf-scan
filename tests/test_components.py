@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import math
 
-from rfscan.app.components import LIMITATIONS_MARKDOWN, explanation_text, format_metric
+from rfscan.app.components import (
+    LIMITATIONS_MARKDOWN,
+    explanation_headline,
+    explanation_reasons,
+    explanation_text,
+    format_metric,
+)
 
 
 def test_format_metric_handles_none_as_not_enough_data():
@@ -65,6 +71,44 @@ def test_explanation_text_never_mentions_ground_truth():
     text = explanation_text(breakdown, "CH2")
     for forbidden in ("ground truth", "true state", "actually active", "occupied"):
         assert forbidden not in text.lower()
+
+
+def test_explanation_reasons_matches_explanation_text_content():
+    """explanation_reasons is the source of truth explanation_text joins
+    into a sentence -- the same phrases must appear in both."""
+    breakdown = {"pred": 0.8, "explore": 0.0, "fresh": 0.2, "trend": 0.0, "redundancy": 0.0}
+    reasons = explanation_reasons(breakdown)
+    sentence = explanation_text(breakdown, "CH5")
+    assert reasons == ["high predicted activity", "has not been scanned recently"]
+    for reason in reasons:
+        assert reason in sentence
+
+
+def test_explanation_reasons_empty_for_forced_freshness_and_empty_breakdown():
+    assert explanation_reasons({}) == []
+    assert explanation_reasons({"forced_freshness": 1.0, "pred": 0.9}) == []
+
+
+def test_explanation_headline_capitalises_the_first_reason():
+    breakdown = {"pred": 0.8, "explore": 0.0, "fresh": 0.0, "trend": 0.0, "redundancy": 0.0}
+    assert explanation_headline(breakdown) == "High predicted activity"
+
+
+def test_explanation_headline_forced_freshness():
+    breakdown = {"forced_freshness": 1.0, "pred": 0.9}
+    headline = explanation_headline(breakdown)
+    assert headline.startswith("Freshness guarantee")
+
+
+def test_explanation_headline_falls_back_when_balanced():
+    breakdown = {"pred": 0.01, "explore": 0.01, "fresh": 0.01, "trend": 0.0, "redundancy": 0.0}
+    expected = "Balanced combination of prediction, exploration, freshness, and trend"
+    assert explanation_headline(breakdown) == expected
+
+
+def test_explanation_headline_handles_empty_breakdown():
+    assert "no decision breakdown" not in explanation_headline({}).lower()
+    assert isinstance(explanation_headline({}), str)
 
 
 def test_limitations_markdown_mentions_required_disclosures():
