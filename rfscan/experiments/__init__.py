@@ -1,4 +1,4 @@
-"""Experiment framework (Phases 4, 8).
+"""Experiment framework (Phases 4, 7, 8).
 
 Phase 4 ships the reproducible-evaluation foundation:
 
@@ -6,10 +6,20 @@ Phase 4 ships the reproducible-evaluation foundation:
 * :mod:`rfscan.experiments.metrics`   - censored-aware episode-level metrics
 * :mod:`rfscan.experiments.benchmark` - scenarios x seeds x strategies grid -> CSV
 
+Phase 7 adds :mod:`rfscan.experiments.adaptation` -- emerging-signal
+pre/post-activation detection rates and per-channel priority/belief tracing
+for AdaptiveScheduler, both pure post-hoc analysis.
+
 Bootstrap CIs, paired significance tests, the A-E ablation, and the robustness
 sweep are Phase 8.
 """
 
+from rfscan.experiments.adaptation import (
+    EmergingAdaptationMetrics,
+    PriorityTrace,
+    emerging_adaptation_metrics,
+    trace_adaptive_episode,
+)
 from rfscan.experiments.benchmark import (
     BenchmarkConfig,
     build_scheduler,
@@ -37,4 +47,8 @@ __all__ = [
     "summarize",
     "write_benchmark",
     "build_scheduler",
+    "EmergingAdaptationMetrics",
+    "emerging_adaptation_metrics",
+    "PriorityTrace",
+    "trace_adaptive_episode",
 ]

@@ -116,3 +116,47 @@ def test_agent_seed_recorded_and_world_unchanged():
 def test_baseline_schedulers_satisfy_the_protocol():
     assert isinstance(SequentialScheduler(4), Scheduler)
     assert isinstance(RandomScheduler(4), Scheduler)
+
+
+# -- Phase 7: on_slot hook -------------------------------------------
+def test_on_slot_hook_is_called_once_per_slot_with_the_slot_index():
+    seen = []
+    run_episode(_env(), SequentialScheduler(12), budget=17, on_slot=seen.append)
+    assert seen == list(range(17))
+
+
+def test_on_slot_hook_runs_after_update_but_before_the_world_steps():
+    world_slots_at_hook_time = []
+
+    class SpyScheduler:
+        name = "spy"
+
+        def select_next(self, store, slot):
+            return 0
+
+        def update(self, record):
+            pass
+
+        def explain(self):
+            return {}
+
+        def reset(self):
+            pass
+
+    env = _env()
+
+    def _capture(slot):
+        world_slots_at_hook_time.append(env.slot)
+
+    run_episode(env, SpyScheduler(), budget=5, on_slot=_capture)
+    assert world_slots_at_hook_time == list(range(5))
+
+
+def test_omitting_on_slot_does_not_change_the_episode():
+    env_a = _env("dynamic", 7)
+    env_b = _env("dynamic", 7)
+    sched = RandomScheduler(12, seed=7)
+    a = run_episode(env_a, sched, budget=200)
+    b = run_episode(env_b, sched, budget=200, on_slot=lambda slot: None)
+    assert np.array_equal(a.scanned_channel, b.scanned_channel)
+    assert np.array_equal(a.occupancy, b.occupancy)

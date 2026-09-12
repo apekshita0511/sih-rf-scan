@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from rfscan.config import SchedulerWeights
+from rfscan.models.baseline_beta import DecayingBetaPredictor
 from rfscan.perception.schema import Observation, ScanRecord
 from rfscan.perception.store import ObservationStore
 from rfscan.scheduler.adaptive import AdaptiveScheduler
@@ -155,3 +156,103 @@ def test_reset_replays_the_same_stream_including_softmax_selection():
 def test_validates_n_channels():
     with pytest.raises(ValueError):
         AdaptiveScheduler(0, _ConstantPredictor(0.0))
+
+
+# -- Phase 7: online feedback (all_breakdowns / belief_snapshot) ----
+def test_all_breakdowns_covers_every_channel_not_just_the_chosen_one():
+    predictor = _PerChannelPredictor([0.2, 0.7, 0.1])
+    sched = AdaptiveScheduler(3, predictor, seed=0)
+    store = ObservationStore(3)
+    for c in range(3):
+        store.append(_rec(0, c, detected=False))
+    choice = sched.select_next(store, 5)
+    breakdowns = sched.all_breakdowns()
+    assert len(breakdowns) == 3
+    assert breakdowns[choice].priority == pytest.approx(sched.explain()["priority"])
+
+
+def test_all_breakdowns_is_empty_before_the_first_decision():
+    sched = AdaptiveScheduler(3, _ConstantPredictor(0.0), seed=0)
+    assert sched.all_breakdowns() == []
+
+
+def test_belief_snapshot_shapes_and_prior_start():
+    sched = AdaptiveScheduler(4, _ConstantPredictor(0.0), seed=0)
+    mean, std = sched.belief_snapshot()
+    assert mean.shape == (4,) and std.shape == (4,)
+    assert np.allclose(mean, 0.5)  # Beta(1,1) prior
+
+
+def test_a_quiet_channels_priority_rises_after_a_hit():
+    """The central Phase 7 story: a channel with no evidence sits at a low
+    priority; one HIT on it, with nothing else changing, raises both its
+    belief mean and its priority for the very next decision -- proving the
+    scheduler's next choice can change because of new evidence, not just that
+    BeliefState's math can (already covered in test_belief.py).
+
+    Needs a predictor whose ``pred`` term actually reacts to the hit (through
+    FeatureBuilder's fresh per-slot features) -- DecayingBetaPredictor reads
+    exactly that. A predictor that ignores its input (e.g. a fixed constant)
+    defeats this by design: with pred/trend/fresh/redundancy all pinned equal,
+    the only term left to move is ``explore`` (belief std), and more evidence
+    lowers uncertainty rather than raising it -- so priority can go *down*
+    after a hit under a predictor that cannot see the hit. That's a real,
+    non-obvious property of the priority formula (S7), not a bug; documented
+    in docs/architecture.md S16.7.
+    """
+    predictor = DecayingBetaPredictor()
+    sched = AdaptiveScheduler(3, predictor, seed=0)
+    store = ObservationStore(3)
+
+    # Warm up: every channel scanned once, all empty, so none is "never
+    # scanned" (which would trigger the hard freshness guarantee and swamp
+    # the effect we're isolating).
+    for c in range(3):
+        rec = _rec(c, c, detected=False)
+        store.append(rec)
+        sched.update(rec)
+
+    tracked = 2
+    sched.select_next(store, 3)  # settle belief/priority state post-warm-up
+    before_mean = sched.belief_snapshot()[0][tracked]
+    before_priority = sched.all_breakdowns()[tracked].priority
+
+    hit = _rec(4, tracked, detected=True)
+    store.append(hit)
+    sched.update(hit)
+
+    sched.select_next(store, 5)
+    after_mean = sched.belief_snapshot()[0][tracked]
+    after_priority = sched.all_breakdowns()[tracked].priority
+
+    assert after_mean > before_mean
+    assert after_priority > before_priority
+
+
+def test_scheduler_decisions_respond_to_online_feedback():
+    """Two schedulers, identical everything, diverge only in whether channel 2
+    got a HIT. With that HIT, its priority should be higher than in the no-hit
+    twin -- the difference comes purely from the new evidence, not from
+    ground truth or different config. Uses DecayingBetaPredictor, same
+    reasoning as the test above (needs a predictor whose pred term can
+    actually see the hit)."""
+    predictor = DecayingBetaPredictor()
+
+    def _build(hit_channel_2: bool) -> tuple[AdaptiveScheduler, ObservationStore]:
+        sched = AdaptiveScheduler(3, predictor, seed=0)
+        store = ObservationStore(3)
+        for c in range(3):
+            rec = _rec(c, c, detected=(hit_channel_2 and c == 2))
+            store.append(rec)
+            sched.update(rec)
+        return sched, store
+
+    sched_no_hit, store_no_hit = _build(hit_channel_2=False)
+    sched_hit, store_hit = _build(hit_channel_2=True)
+
+    sched_no_hit.select_next(store_no_hit, 3)
+    sched_hit.select_next(store_hit, 3)
+
+    priority_no_hit = sched_no_hit.all_breakdowns()[2].priority
+    priority_hit = sched_hit.all_breakdowns()[2].priority
+    assert priority_hit > priority_no_hit

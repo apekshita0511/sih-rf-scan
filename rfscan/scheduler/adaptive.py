@@ -27,7 +27,7 @@ from rfscan.perception.features import FEATURE_NAMES, FeatureBuilder
 from rfscan.perception.schema import ScanRecord
 from rfscan.perception.store import ReadableStore
 from rfscan.scheduler.belief import BeliefState
-from rfscan.scheduler.policy import PriorityPolicy
+from rfscan.scheduler.policy import PriorityBreakdown, PriorityPolicy
 
 _STALENESS_COL = FEATURE_NAMES.index("slots_since_last_scan")
 _TREND_COL = FEATURE_NAMES.index("activity_trend")
@@ -73,6 +73,7 @@ class AdaptiveScheduler:
         )
         self._rng = np.random.default_rng(self._seed)
         self._last: dict[str, float] = {}
+        self._last_breakdowns: list[PriorityBreakdown] = []
 
     def select_next(self, store: ReadableStore, slot: int) -> int:
         self._belief.decay()
@@ -88,6 +89,7 @@ class AdaptiveScheduler:
             staleness=staleness,
             activity_trend=trend,
         )
+        self._last_breakdowns = breakdowns
 
         forced = np.flatnonzero(staleness >= self._max_revisit)
         if forced.size > 0:
@@ -119,7 +121,30 @@ class AdaptiveScheduler:
     def explain(self) -> Mapping[str, float]:
         return dict(self._last)
 
+    def all_breakdowns(self) -> list[PriorityBreakdown]:
+        """Every channel's :class:`PriorityBreakdown` from the most recent
+        :meth:`select_next` call, not just the one that was chosen.
+
+        ``explain()`` (the ``Scheduler`` protocol) only ever reports the
+        chosen channel, by design (S10's stacked-bar panel shows one
+        decision). This is Phase 7's read-only introspection extension for
+        answering "what was channel *c*'s priority right now, even though it
+        wasn't picked" -- e.g. tracking a quiet channel's priority before it
+        has enough evidence to win argmax. Zero extra cost: ``PriorityPolicy.
+        score`` already computes every channel's breakdown on the hot path;
+        this just keeps the reference instead of discarding it.
+        """
+        return list(self._last_breakdowns)
+
+    def belief_snapshot(self) -> tuple[np.ndarray, np.ndarray]:
+        """``(mean, std)`` arrays, shape ``(n_channels,)``, of the belief
+        layer's current state (after the last :meth:`select_next`'s
+        ``decay()`` and any prior :meth:`update`). Read-only introspection,
+        same rationale as :meth:`all_breakdowns`."""
+        return self._belief.mean(), self._belief.std()
+
     def reset(self) -> None:
         self._belief.reset()
         self._rng = np.random.default_rng(self._seed)
         self._last = {}
+        self._last_breakdowns = []

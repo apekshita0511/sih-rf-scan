@@ -14,6 +14,7 @@ run against the same ``(scenario, world_seed)`` faces a byte-identical world.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -57,11 +58,19 @@ def run_episode(
     budget: int,
     *,
     agent_seed: int | None = None,
+    on_slot: Callable[[int], None] | None = None,
 ) -> EpisodeResult:
     """Run ``scheduler`` against ``env`` for ``budget`` slots (one scan per slot).
 
     ``env`` and ``scheduler`` are reset first, so the call is self-contained and
     repeatable with the same instances.
+
+    ``on_slot``, if given, is called once per slot with the slot index, after
+    ``scheduler.update(record)`` but before ``env.step()`` -- i.e. once this
+    slot's decision and its outcome are both settled. It changes nothing about
+    the episode (called for its side effect only, e.g. Phase 7's priority
+    tracing via a scheduler-specific introspection method); omitted, it costs
+    nothing and every existing caller is unaffected.
     """
     if budget < 1:
         raise ValueError(f"budget must be >= 1, got {budget}")
@@ -89,6 +98,8 @@ def run_episode(
         occupancy[slot] = env.occupancy_snapshot()
         scanned[slot] = choice
         detected[slot] = record.detected
+        if on_slot is not None:
+            on_slot(slot)
         env.step()
 
     emerging = sorted(
